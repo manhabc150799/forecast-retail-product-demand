@@ -1,0 +1,53 @@
+# =========================
+# IntelliJ IDEA
+# =========================
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# =========================
+# Plugins & AI Tools (Qodo, Antigravity)
+# =========================
+.qodo/
+qodo/
+*.qodo
+.antigravity/
+antigravity/
+
+# =========================
+# Python & Machine Learning (PyTorch)
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# PyTorch checkpoints (nếu có lưu)
+*.pth
+*.pt
+*.ckpt
+
+# =========================
+# Virtual Environments
+# =========================
+venv/
+.venv/
+env/
+.env/
+
+# =========================
+# OS Generated Files
+# =========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
