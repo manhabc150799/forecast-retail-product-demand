@@ -1,15 +1,91 @@
-%! Author = LENOVO
-%! Date = 4/11/2026
+\documentclass[12pt,a4paper]{article}
 
-% Preamble
-\documentclass[11pt]{article}
-
-% Packages
+% Khai báo các gói hỗ trợ tiếng Việt và định dạng
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vietnamese]{babel}
 \usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{parskip} % Hỗ trợ dãn dòng giữa các đoạn
 
-% Document
 \begin{document}
 
+    \begin{center}
+        \LARGE\textbf{BÁO CÁO NGHIÊN CỨU SƠ BỘ}\\[1.5ex]
+        \large\textbf{Chủ đề:} Đánh giá và Áp dụng Mô hình Naïve và Seasonal Naïve trong Dự báo Nhu cầu Bán lẻ
+    \end{center}
 
+    \vspace{0.5cm}
+    \hrule
+    \vspace{0.5cm}
+
+    \section{Tổng quan (Introduction)}
+    Trong các bài toán dự báo chuỗi thời gian, việc xây dựng các mô hình cơ sở (Baseline Models) là bước thực hành tiêu chuẩn mang tính bắt buộc. Mục đích của các mô hình này không phải để đạt được độ chính xác tuyệt đối, mà để thiết lập một cột mốc đánh giá tối thiểu so với các mô hình được coi là tiên tiến hơn. Hai mô hình phổ biến nhất cho nhiệm vụ này là Mô hình Naïve và Mô hình Seasonal Naïve. Nếu các mô hình máy học phức tạp (như SARIMAX hay Global LSTM) không thể vượt qua được các chỉ số đánh giá so với các mô hình Baseline, đó cũng được xem là một phát hiện có giá trị trong nghiên cứu.
+
+    \section{Mô hình Naïve (Naïve Model)}
+
+    \subsection{Định nghĩa và Đặc điểm}
+    Mô hình Naïve (hay còn gọi là phương pháp bước đi ngẫu nhiên) là một mô hình dự báo giả định rằng mọi điều kiện của ngày hôm nay sẽ giống hệt như ngày hôm qua. Cụ thể, mô hình này thiết lập tất cả các giá trị dự báo trong tương lai bằng đúng với giá trị quan sát cuối cùng của tập dữ liệu lịch sử.
+
+    Mô hình Naïve hoàn toàn bỏ qua yếu tố mùa vụ (seasonality) và giả định rằng không có bất kỳ sự thay đổi nào xảy ra giữa các khoảng thời gian.
+
+    \subsection{Công thức Toán học}
+    Dự báo cho thời điểm $T+h$ được biểu diễn như sau:
+    \[ \hat{y}_{T+h|T} = y_T \]
+
+    Trong đó:
+    \begin{itemize}
+        \item $\hat{y}_{T+h|T}$ là giá trị dự báo cho $h$ bước thời gian trong tương lai.
+        \item $y_T$ là giá trị thực tế quan sát được ở thời điểm cuối cùng $T$.
+    \end{itemize}
+
+    \section{Mô hình Seasonal Naïve (SNaive Model)}
+
+    \subsection{Định nghĩa và Đặc điểm}
+    Mô hình Seasonal Naïve (hay Naïve theo mùa vụ) là một biến thể được thiết kế đặc biệt cho các chuỗi dữ liệu có tính mùa vụ cao. Mô hình này giải quyết điểm yếu của Naïve cơ bản bằng cách giả định rằng giá trị của một thời điểm trong tương lai sẽ bằng với giá trị đã quan sát được ở cùng kỳ của chu kỳ mùa vụ trước đó.
+
+    Về mặt cấu trúc, Seasonal Naïve có thể được xem là một trường hợp đặc biệt của mô hình SARIMA, cụ thể là $ARIMA(0, 0, 0)(0, 1, 0)_s$ với chu kỳ $s$.
+
+    \subsection{Công thức Toán học}
+    Dự báo cho thời điểm $T+h$ được định nghĩa bằng công thức:
+    \[ \hat{y}_{T+h|T} = y_{T+h-m(k+1)} \]
+
+    Trong đó:
+    \begin{itemize}
+        \item $m$ là chu kỳ mùa vụ (seasonal period).
+        \item $k$ là phần nguyên của phép chia $(h-1)/m$, thể hiện số năm (hoặc số chu kỳ) hoàn chỉnh trong khoảng thời gian dự báo.
+    \end{itemize}
+
+    \section{Áp dụng vào Đồ án Dự báo Tập dữ liệu M5 (Walmart)}
+
+    \subsection{Bối cảnh Hệ thống}
+    Đồ án yêu cầu dự báo doanh số bán lẻ hàng ngày (daily sales) ở cấp độ item-store cho 14 ngày tiếp theo (horizon = 14). Trong Phase 1, các mô hình Baseline sẽ chỉ sử dụng dữ liệu lịch sử bán hàng (sales history) mà không dùng bất kỳ features ngoại sinh nào khác.
+
+    \subsection{Cài đặt Thuật toán (Implementation)}
+    Dựa trên lý thuyết, thuật toán lập trình cho 2 mô hình này trong đồ án được thiết kế vô cùng tinh gọn:
+    \begin{itemize}
+        \item \textbf{Với thuật toán Naïve:} Do dự báo 14 ngày, mô hình sẽ lấy giá trị ngày cuối cùng của tập train và lặp lại 14 lần.\\
+        Công thức logic: \texttt{y\_pred[t] = y\_train[-1]} cho mọi $t$ trong horizon.
+        \item \textbf{Với thuật toán SNaive:} Dữ liệu bán lẻ có tính chu kỳ tuần mạnh ($m=7$). Do đó, mô hình sẽ lấy mô hình tiêu thụ của 7 ngày cuối cùng tập train và lặp lại cho các tuần dự báo.\\
+        Công thức logic: \texttt{y\_pred[t] = y\_train[-(7 - t\%7)]}.
+    \end{itemize}
+
+    \subsection{Vai trò Tích hợp trong Đồ án}
+    Hai mô hình này không chỉ đứng độc lập mà còn đóng vai trò cốt lõi trong hệ thống luồng (pipeline) của đồ án:
+    \begin{enumerate}
+        \item \textbf{Cơ sở tính toán Metric (MASE):} SNaive là bắt buộc để tính toán chỉ số Mean Absolute Scaled Error (MASE) - một metric quan trọng để đánh giá chéo giữa các mô hình. Công thức lấy lỗi trung bình của mô hình SNaive dự báo 1-bước trên tập training làm mẫu số để chia độ lỗi cho các mô hình khác. Nếu $MASE < 1$, mô hình học sâu (LSTM/SARIMAX) thực sự tốt hơn baseline.
+        \item \textbf{Cơ chế Fallback (Dự phòng):} Thuật toán tự động (\texttt{auto\_arima}) của SARIMAX có rủi ro không hội tụ hoặc vượt quá thời gian cho phép (timeout 60 giây). Trong các trường hợp lỗi này, hệ thống sẽ sử dụng trực tiếp kết quả của SNaive để trám vào (Fallback) nhằm đảm bảo pipeline không bị gián đoạn.
+    \end{enumerate}
+
+    \section{Dự đoán Kết quả \& Hạn chế}
+
+    \begin{itemize}
+        \item \textbf{So sánh Nội bộ (Naïve vs. SNaive):} Dữ liệu bán lẻ của chuỗi siêu thị như Walmart có sự phân hóa rõ rệt giữa các ngày trong tuần (ví dụ: cuối tuần doanh số tăng vọt). Việc sử dụng Naïve sẽ cho ra kết quả dự báo kém (tạo ra một đường thẳng đi ngang), trong khi SNaive sẽ thể hiện sự vượt trội rõ rệt vì nó bắt được chu kỳ ngắn như 7 ngày của hành vi mua sắm.
+        \item \textbf{Hạn chế chung:} Cả hai mô hình đều không có khả năng nhận diện xu hướng dài hạn. Ngoài ra, chúng hoàn toàn không biết trước các biến số ngoại sinh tác động mạnh đến nhu cầu mua sắm như: thay đổi giá bán (\texttt{sell\_price}), ngày lễ (\texttt{is\_holiday}), hay các sự kiện phát phiếu thực phẩm (\texttt{snap}) hay các sự kiện bất ngờ không kiểm soát của thị trường.
+        \item \textbf{Kỳ vọng Đồ án:} Do những hạn chế trên, khi đồ án bước vào Phase 2 (bổ sung các features nâng cao), mô hình Global LSTM và SARIMAX được kỳ vọng sẽ cho ra các chỉ số MAE, RMSE thấp hơn đáng kể so với hai mô hình Baseline này.
+    \end{itemize}
 
 \end{document}

@@ -51,3 +51,5 @@ env/
 .Trashes
 ehthumbs.db
 Thumbs.db
+out/
+auxil/
