@@ -34,3 +34,4 @@ out/
 auxil/
 .vscode/
 vscode/
+data/*.csv
