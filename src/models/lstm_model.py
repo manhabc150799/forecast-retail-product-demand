@@ -30,15 +30,29 @@ LR: float = 0.001
 PATIENCE: int = 5
 
 # features dung cho LSTM, khong bao gom item_id/store_id/date vi la categorical
-FEATURE_COLS: list[str] = [
+# phase 1 chi dung calendar features co ban
+PHASE1_FEATURE_COLS: list[str] = [
     "sales",
-    "day_of_week", "month", "is_holiday", "is_weekend", "snap",
+    "day_of_week", "month", "is_holiday", "is_weekend",
+]
+# phase 2 them lag/rolling/price/snap (enhanced features)
+PHASE2_FEATURE_COLS: list[str] = PHASE1_FEATURE_COLS + [
     "rolling_7", "rolling_28",
     "lag_7", "lag_14", "lag_28",
-    "sell_price",
+    "sell_price", "snap",
 ]
 # vi tri cot sales trong FEATURE_COLS, dung de tach y khi build windows
+# sales luon la cot dau tien trong ca 2 phase
 _SALES_IDX: int = 0
+
+
+def get_feature_cols(phase: int) -> list[str]:
+    """Tra ve danh sach feature tuong ung voi phase (1 hoac 2)."""
+    if phase == 1:
+        return PHASE1_FEATURE_COLS
+    if phase == 2:
+        return PHASE2_FEATURE_COLS
+    raise ValueError(f"phase must be 1 or 2, got {phase}")
 
 
 @dataclass
@@ -120,6 +134,7 @@ def prepare_fold_data(
     train_end: pd.Timestamp,
     test_start: pd.Timestamp,
     test_end: pd.Timestamp,
+    phase: int = 1,
 ) -> dict[str, Any]:
     # fit scaler CHI tren train de chong data leakage
     # sau do transform ca train lan test bang cung 1 scaler
@@ -140,7 +155,8 @@ def prepare_fold_data(
             skipped[(item_id, store_id)] = "insufficient_training_data"
             continue
 
-        feats = train_s[FEATURE_COLS].to_numpy(dtype=np.float32)
+        feature_cols = get_feature_cols(phase)
+        feats = train_s[feature_cols].to_numpy(dtype=np.float32)
         # dropna vi lag/rolling cot dau tien cua series luon NaN
         mask = ~np.isnan(feats).any(axis=1)
         feats = feats[mask]
@@ -294,7 +310,8 @@ def predict_fold(
 
         # inverse transform chi cot sales (idx 0)
         # tao dummy array voi shape (horizon, n_features) de dung scaler
-        dummy = np.zeros((HORIZON, len(FEATURE_COLS)), dtype=np.float32)
+        n_features = scaler.n_features_in_
+        dummy = np.zeros((HORIZON, n_features), dtype=np.float32)
         dummy[:, _SALES_IDX] = y_scaled
         y_inv = scaler.inverse_transform(dummy)[:, _SALES_IDX]
 
@@ -310,9 +327,11 @@ def run_lstm_fold(
     train_end: pd.Timestamp,
     test_start: pd.Timestamp,
     test_end: pd.Timestamp,
+    phase: int = 1,
 ) -> LstmFoldResult:
     fold_data = prepare_fold_data(
         sc_indexed, series_list, train_end, test_start, test_end,
+        phase=phase,
     )
 
     result = LstmFoldResult()
@@ -358,6 +377,7 @@ if __name__ == "__main__":
         pd.Timestamp(fold_1["train_end"]),
         pd.Timestamp(fold_1["test_start"]),
         pd.Timestamp(fold_1["test_end"]),
+        phase=1,
     )
 
     print(f"\nConverged: {result.converged}")

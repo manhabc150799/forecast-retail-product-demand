@@ -1,4 +1,4 @@
-# chay experiment cho Naive, SNaive, SARIMAX, LSTM
+# chay experiment cho Naive, SNaive, SARIMAX, LSTM, Prophet
 # dung append mode ghi thang xuong CSV, tranh OOM khi loop qua nhieu series
 # ResourceProfiler thay the inline profiling code cu
 
@@ -30,6 +30,10 @@ from src.models.lstm_model import (                                  # noqa: E40
     HORIZON as LSTM_HORIZON,
     run_lstm_fold,
 )
+from src.models.prophet_model import (                               # noqa: E402
+    ProphetResult,
+    forecast_series as prophet_forecast_series,
+)
 from src.data.mock_factory import generate_mock_m5_data              # noqa: E402
 from src.evaluation.profiler import ResourceProfiler                 # noqa: E402
 from src.evaluation.metrics import compute_metrics                   # noqa: E402
@@ -37,7 +41,7 @@ from src.evaluation.metrics import compute_metrics                   # noqa: E40
 
 HORIZON: int = 14
 SEASON: int = 7
-MODELS: list[str] = ["naive", "snaive", "sarimax", "lstm"]
+MODELS: list[str] = ["naive", "snaive", "sarimax", "lstm", "prophet"]
 
 PRED_HEADER: list[str] = [
     "date", "item_id", "store_id", "y_true", "y_pred", "fold", "fallback",
@@ -182,6 +186,40 @@ def _run_sarimax(
     ])
 
 
+def _run_prophet(
+    train_df: pd.DataFrame,
+    future_df: pd.DataFrame,
+    y_test: np.ndarray,
+    test_dates: pd.Series,
+    item_id: str,
+    store_id: str,
+    fold: int,
+    phase: int,
+    pred_csv: CsvAppender,
+    log_csv: CsvAppender,
+) -> None:
+    with ResourceProfiler() as prof:
+        result: ProphetResult = prophet_forecast_series(
+            train_df, future_df, phase=phase,
+            horizon=HORIZON, season=SEASON, timeout=120,
+        )
+
+    for i in range(HORIZON):
+        pred_csv.write_row([
+            str(test_dates.iloc[i].date()),
+            item_id, store_id,
+            float(y_test[i]), float(result.y_pred[i]),
+            fold, result.fallback,
+        ])
+
+    stats = prof.to_dict()
+    log_csv.write_row([
+        fold, item_id, store_id,
+        stats["train_time_s"], stats["peak_ram_mb"], stats["cpu_percent"],
+        result.converged, result.error_msg,
+    ])
+
+
 def _run_lstm_fold(
     sc_indexed: pd.DataFrame,
     series_list: list[tuple[str, str]],
@@ -189,6 +227,7 @@ def _run_lstm_fold(
     pred_csv: CsvAppender,
     log_csv: CsvAppender,
     sc: pd.DataFrame,
+    phase: int = 1,
 ) -> None:
     # LSTM train 1 lan cho ca fold, train_time_s la 1 so duy nhat
     # lap lai cung gia tri cho tat ca series trong fold
@@ -200,6 +239,7 @@ def _run_lstm_fold(
     with ResourceProfiler() as prof:
         fold_result = run_lstm_fold(
             sc_indexed, series_list, train_end, test_start, test_end,
+            phase=phase,
         )
 
     stats = prof.to_dict()
@@ -363,6 +403,7 @@ def run_all_experiments(
                     _run_lstm_fold(
                         sc_indexed, series_list,
                         fold_info, pred_csv, log_csv, sc,
+                        phase=phase,
                     )
         else:
             total_iters = n_folds * n_series
@@ -433,6 +474,15 @@ def run_all_experiments(
                                 item_id, store_id, fold_num,
                                 phase, pred_csv, log_csv,
                             )
+                        elif model_name == "prophet":
+                            train_df = train_slice.reset_index()
+                            future_df = test_slice.reset_index().head(HORIZON)
+                            _run_prophet(
+                                train_df, future_df,
+                                y_test, test_dates,
+                                item_id, store_id, fold_num,
+                                phase, pred_csv, log_csv,
+                            )
 
                         pbar.update(1)
 
@@ -458,8 +508,10 @@ def run_all_experiments(
         print()
 
     # merge tat ca models vao 1 file de so sanh
+    # Prophet da la model binh thuong trong pipeline, khong can auto-merge rieng
     if all_metrics:
         combined = pd.concat(all_metrics, ignore_index=True)
+
         out_path = metrics_dir / "metrics_comparison.csv"
         combined.to_csv(out_path, index=False)
         print(f"  -> Metrics comparison: {out_path}  ({len(combined)} rows)")
@@ -480,7 +532,7 @@ def run_all_experiments(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="M5 Forecasting - run Naive / SNaive / SARIMAX / LSTM experiments",
+        description="M5 Forecasting - run Naive / SNaive / SARIMAX / LSTM / Prophet experiments",
     )
     parser.add_argument(
         "--phase", type=int, default=1, choices=[1, 2],
