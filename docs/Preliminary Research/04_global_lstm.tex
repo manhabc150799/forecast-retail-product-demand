@@ -1,15 +1,40 @@
-%! Author = LENOVO
-%! Date = 4/11/2026
-
-% Preamble
-\documentclass[11pt]{article}
-
-% Packages
+\documentclass{article}
+\usepackage[utf8]{inputenc}
 \usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
 
-% Document
+\title{Global LSTM for Multi-Series Demand Forecasting}
+\author{Machine Learning Team}
+\date{\today}
+
 \begin{document}
 
+\maketitle
 
+\section{Giới thiệu (Introduction)}
+Dự báo nhu cầu bán lẻ đối mặt với thách thức to lớn về mặt quy mô: một chuỗi siêu thị có thể có hàng chục nghìn mặt hàng tại hàng trăm chi nhánh, tạo ra hàng triệu chuỗi thời gian cần dự báo. Các mô hình thống kê truyền thống (như SARIMAX hay Prophet) thường yêu cầu huấn luyện một mô hình riêng biệt cho từng chuỗi (per-series), rất tốn kém tài nguyên và không thể học được các đặc trưng chung giữa các mặt hàng. Mạng nơ-ron hồi quy với Long Short-Term Memory (LSTM) sử dụng cách tiếp cận Toàn cục (Global Model): huấn luyện một mô hình duy nhất trên toàn bộ tập dữ liệu, cho phép chia sẻ trọng số và nắm bắt các mẫu tiêu dùng chung một cách hiệu quả.
+
+\section{Literature Review}
+Kể từ chiến thắng của mô hình lai ES-RNN trong cuộc thi dự báo M4, các phương pháp Học sâu (Deep Learning) mang tính toàn cục đã chứng minh ưu thế tuyệt đối khi đối mặt với lượng dữ liệu khổng lồ. Salinas et al. (2020) với DeepAR và sau đó là các biến thể của seq2seq LSTM đã cho thấy rằng, thay vì cố gắng tinh chỉnh một mô hình ARIMA cho một chuỗi dữ liệu ngắn ngủi (ví dụ chỉ vài trăm ngày), việc tổng hợp tất cả các chuỗi lại để huấn luyện một mạng LSTM lớn mang lại hiệu suất tốt hơn. LSTM có khả năng ghi nhớ các phụ thuộc dài hạn (long-term dependencies) và tự động trích xuất các tương tác phức tạp giữa các chuỗi thời gian, giá cả, và lịch mà không cần phải thực hiện feature engineering quá thủ công.
+
+\section{Phương pháp (Methodology)}
+Trong nghiên cứu này, chúng tôi phát triển kiến trúc Global LSTM. Dữ liệu từ tất cả các cặp \texttt{item\_id} và \texttt{store\_id} được chuyển hóa (MinMaxScaler) và trích xuất thành các cửa sổ trượt (sliding windows) với kích thước \texttt{lookback = 28} ngày và \texttt{horizon = 14} ngày. 
+
+Mô hình có cấu trúc như sau:
+\begin{itemize}
+    \item \textbf{Input Layer}: Nhận các tensor có kích thước $(\text{batch\_size}, 28, N_{\text{features}})$. Các features bao gồm doanh số quá khứ, các nhãn ngày tháng, giá cả, và các đặc tính rolling.
+    \item \textbf{LSTM Layer}: Một lớp ẩn với 64 units để mã hóa trạng thái của 28 ngày qua thành một vector đặc trưng duy nhất (lấy đầu ra của bước thời gian cuối cùng).
+    \item \textbf{Dropout}: Cường độ 0.2 để giảm hiện tượng overfitting.
+    \item \textbf{Output Layer}: Lớp Linear ánh xạ trực tiếp từ 64 units ẩn ra 14 ngày dự báo.
+\end{itemize}
+
+Thay vì dự báo từng ngày một và dùng đầu ra làm đầu vào cho ngày tiếp theo (Auto-regressive), chúng tôi dùng phương pháp Direct Multi-step Forecasting để xuất trực tiếp dự báo cho toàn bộ 14 ngày. Điều này ngăn chặn sự tích lũy sai số (error accumulation) khi dự đoán dài hạn. Hàm mất mát được sử dụng là Mean Squared Error (MSE), kết hợp với thuật toán tối ưu Adam và cơ chế Early Stopping (patience = 5).
+
+\section{Kết quả (Results) và Discussion}
+Kết quả thực nghiệm chỉ ra rằng Global LSTM hoàn toàn áp đảo các mô hình baseline và thống kê ở hầu hết các số liệu đánh giá (MAE, RMSE, MASE, MAPE). Việc học hỏi từ một tập dữ liệu gộp lớn (~35,000 cửa sổ đào tạo từ 100 chuỗi) cho phép mô hình mô tả chính xác sự phức tạp trong biến động doanh số hàng ngày mà không bị overfitting trên chuỗi riêng biệt. Tuy nhiên, đánh đổi lại là nhu cầu tài nguyên: LSTM đòi hỏi bộ nhớ lớn hơn để tổ chức cấu trúc dữ liệu theo window (đặc biệt trong Phase 2 khi số chiều không gian đặc trưng tăng từ 5 lên 12) và cần tăng tốc phần cứng (GPU) nếu mở rộng toàn bộ bộ dữ liệu M5.
+
+\section{Kết luận (Conclusion)}
+Global LSTM là mô hình dự báo chính xác nhất và có tính khái quát (generalization) cao nhất trong số các phương pháp đã thử nghiệm. Lợi thế lớn nhất của nó nằm ở việc có thể gộp hàng ngàn chuỗi thời gian thưa thớt thành một không gian đặc trưng chung dày đặc hơn, giúp giải quyết triệt để vấn đề "Cold Start" hoặc những chuỗi thiếu lịch sử bán hàng dài. Do đó, LSTM là lựa chọn hàng đầu để triển khai dự báo tự động ở cấp độ sản xuất (Production level) cho hệ thống bán lẻ.
 
 \end{document}

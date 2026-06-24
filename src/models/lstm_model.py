@@ -1,6 +1,11 @@
-# global LSTM: train 1 model chung cho tat ca 100 series
-# vi moi series chi co ~400 ngay, 1 model rieng se overfit ngay
-# gop chung 100 series x ~350 windows = ~35k samples, du de hoc pattern chung
+"""Global LSTM for multi-series demand forecasting.
+
+Trains a single LSTM model on **all** selected series simultaneously
+(Global approach) instead of fitting one model per series.  With only
+~400 days per series, a per-series model would overfit immediately.
+Pooling ~100 series yields ~35 k training windows, sufficient to learn
+shared weekly-seasonal patterns.
+"""
 
 from __future__ import annotations
 
@@ -29,25 +34,30 @@ BATCH: int = 64
 LR: float = 0.001
 PATIENCE: int = 5
 
-# features dung cho LSTM, khong bao gom item_id/store_id/date vi la categorical
-# phase 1 chi dung calendar features co ban
 PHASE1_FEATURE_COLS: list[str] = [
     "sales",
     "day_of_week", "month", "is_holiday", "is_weekend",
 ]
-# phase 2 them lag/rolling/price/snap (enhanced features)
 PHASE2_FEATURE_COLS: list[str] = PHASE1_FEATURE_COLS + [
     "rolling_7", "rolling_28",
     "lag_7", "lag_14", "lag_28",
     "sell_price", "snap",
 ]
-# vi tri cot sales trong FEATURE_COLS, dung de tach y khi build windows
-# sales luon la cot dau tien trong ca 2 phase
 _SALES_IDX: int = 0
 
 
 def get_feature_cols(phase: int) -> list[str]:
-    """Tra ve danh sach feature tuong ung voi phase (1 hoac 2)."""
+    """Return the list of input feature column names for a given phase.
+
+    Args:
+        phase: Experiment phase (1 or 2).
+
+    Returns:
+        List of column name strings (``sales`` is always first).
+
+    Raises:
+        ValueError: If *phase* is not 1 or 2.
+    """
     if phase == 1:
         return PHASE1_FEATURE_COLS
     if phase == 2:
@@ -57,6 +67,14 @@ def get_feature_cols(phase: int) -> list[str]:
 
 @dataclass
 class LstmResult:
+    """Result for a single series within a fold.
+
+    Attributes:
+        y_pred: Predicted values, shape ``(horizon,)``.
+        converged: Whether training completed without error.
+        error_msg: Empty string on success, descriptive message on failure.
+    """
+
     y_pred: np.ndarray
     converged: bool
     error_msg: str
@@ -64,8 +82,15 @@ class LstmResult:
 
 @dataclass
 class LstmFoldResult:
-    # gom ket qua cua toan bo fold lai 1 cho
-    # predictions la dict[tuple[item_id, store_id], np.ndarray]
+    """Aggregated result for an entire fold (all series).
+
+    Attributes:
+        predictions: Mapping ``(item_id, store_id) -> y_pred``.
+        skipped: Mapping ``(item_id, store_id) -> reason`` for skipped series.
+        converged: ``True`` if global training completed.
+        train_time_s: Wall-clock training time in seconds.
+    """
+
     predictions: dict[tuple[str, str], np.ndarray] = field(default_factory=dict)
     skipped: dict[tuple[str, str], str] = field(default_factory=dict)
     converged: bool = True
@@ -73,9 +98,15 @@ class LstmFoldResult:
 
 
 class GlobalLSTM(nn.Module):
-    # hidden=64, layers=1, dropout=0.2 theo yeu cau guideline
-    # output 14 ngay truc tiep (multi-step direct) thay vi autoregressive
-    # vi autoregressive loi tich luy error theo thoi gian
+    """Single-layer LSTM that predicts *horizon* steps directly.
+
+    Architecture: LSTM(n_features -> 64) -> Dropout(0.2) -> Linear(64 -> 14).
+    Uses direct multi-step output instead of autoregressive decoding
+    to avoid error accumulation over the 14-day horizon.
+
+    Args:
+        n_features: Number of input features per time step.
+    """
 
     def __init__(self, n_features: int) -> None:
         super().__init__()
@@ -86,13 +117,18 @@ class GlobalLSTM(nn.Module):
             dropout=DROPOUT if LAYERS > 1 else 0.0,
             batch_first=True,
         )
-        # dropout rieng sau LSTM vi khi layers=1 thi LSTM khong tu dropout
         self.drop = nn.Dropout(DROPOUT)
         self.fc = nn.Linear(HIDDEN, HORIZON)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # chi lay hidden state cua timestep cuoi cung
-        # vi du bao la "nhin 28 ngay qua, du doan 14 ngay toi"
+        """Forward pass: encode lookback window, decode to horizon.
+
+        Args:
+            x: Input tensor of shape ``(batch, lookback, n_features)``.
+
+        Returns:
+            Predictions of shape ``(batch, horizon)``.
+        """
         out, _ = self.lstm(x)
         last = out[:, -1, :]
         return self.fc(self.drop(last))
@@ -101,8 +137,18 @@ class GlobalLSTM(nn.Module):
 def _build_windows(
     series_data: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    # sliding window stride=1, moi window: X = 28 timesteps x n_features, y = 14 ngay sales
-    # stride=1 cho nhieu sample nhat co the tu data it
+    """Create sliding-window (X, y) pairs from a single series.
+
+    Uses stride-tricks for zero-copy windowing.  Stride = 1 to maximise
+    the number of training samples from limited data.
+
+    Args:
+        series_data: 2-D array of shape ``(n_steps, n_features)``.
+
+    Returns:
+        Tuple ``(X, y)`` where X has shape ``(n_windows, lookback, n_features)``
+        and y has shape ``(n_windows, horizon)``.
+    """
     n_steps = series_data.shape[0]
     n_feat = series_data.shape[1]
     total = LOOKBACK + HORIZON
@@ -111,8 +157,6 @@ def _build_windows(
 
     n_windows = n_steps - total + 1
 
-    # dung as_strided de tao view cua tat ca windows cung luc, khong copy memory
-    # shape = (n_windows, total, n_feat), strides buoc theo dong goc
     from numpy.lib.stride_tricks import as_strided
     item_size = series_data.strides
     all_windows = as_strided(
@@ -122,7 +166,6 @@ def _build_windows(
     )
 
     X = np.array(all_windows[:, :LOOKBACK, :], dtype=np.float32)
-    # y chi la cot sales (idx 0) cua 14 ngay cuoi moi window
     y = np.array(all_windows[:, LOOKBACK:, _SALES_IDX], dtype=np.float32)
 
     return X, y
@@ -136,8 +179,24 @@ def prepare_fold_data(
     test_end: pd.Timestamp,
     phase: int = 1,
 ) -> dict[str, Any]:
-    # fit scaler CHI tren train de chong data leakage
-    # sau do transform ca train lan test bang cung 1 scaler
+    """Prepare training windows and test inputs for one fold.
+
+    Fits a MinMaxScaler on the training portion only (anti-leakage),
+    then builds sliding windows from all series and stores the last
+    ``LOOKBACK`` rows of each series as test input.
+
+    Args:
+        sc_indexed: Sales DataFrame indexed by ``(item_id, store_id, date)``.
+        series_list: List of ``(item_id, store_id)`` tuples.
+        train_end: Last date of the training period.
+        test_start: First date of the test period.
+        test_end: Last date of the test period.
+        phase: Experiment phase (determines feature set).
+
+    Returns:
+        Dictionary with keys ``X``, ``y``, ``scaler``, ``test_inputs``,
+        ``skipped``.  ``X``/``y`` are ``None`` when no valid windows exist.
+    """
     train_feats_list: list[np.ndarray] = []
     test_inputs: dict[tuple[str, str], np.ndarray] = {}
     skipped: dict[tuple[str, str], str] = {}
@@ -157,7 +216,6 @@ def prepare_fold_data(
 
         feature_cols = get_feature_cols(phase)
         feats = train_s[feature_cols].to_numpy(dtype=np.float32)
-        # dropna vi lag/rolling cot dau tien cua series luon NaN
         mask = ~np.isnan(feats).any(axis=1)
         feats = feats[mask]
 
@@ -167,19 +225,16 @@ def prepare_fold_data(
 
         train_feats_list.append(feats)
 
-        # test input = 28 ngay cuoi cua train, dung de predict 14 ngay toi
         test_inputs[(item_id, store_id)] = feats[-LOOKBACK:]
 
     if not train_feats_list:
         return {"X": None, "y": None, "scaler": None,
                 "test_inputs": {}, "skipped": skipped}
 
-    # fit scaler tren toan bo train data cua moi series trong fold
     all_train = np.concatenate(train_feats_list, axis=0)
     scaler = MinMaxScaler()
     scaler.fit(all_train)
 
-    # build windows tu tung series roi gop lai
     X_list: list[np.ndarray] = []
     y_list: list[np.ndarray] = []
     for feats in train_feats_list:
@@ -196,10 +251,6 @@ def prepare_fold_data(
     X_all = np.concatenate(X_list, axis=0)
     y_all = np.concatenate(y_list, axis=0)
 
-    # y cua target la sales goc (chua scale) de loss co y nghia vat ly
-    # nhung X da scale nen y cung phai scale tuong ung
-    # -> inverse transform y sau khi predict
-
     return {
         "X": X_all,
         "y": y_all,
@@ -214,6 +265,20 @@ def train_global_lstm(
     y: np.ndarray,
     device: torch.device | None = None,
 ) -> tuple[GlobalLSTM, bool]:
+    """Train a Global LSTM on pooled training windows.
+
+    Uses 90/10 train/validation split with early stopping
+    (patience = 5 epochs).  Adam optimizer with MSE loss.
+
+    Args:
+        X: Input windows, shape ``(n_samples, lookback, n_features)``.
+        y: Target windows, shape ``(n_samples, horizon)``.
+        device: PyTorch device (auto-detected if ``None``).
+
+    Returns:
+        Tuple ``(model, converged)`` where *converged* is ``True``
+        when training completed (even if early-stopped).
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -222,12 +287,9 @@ def train_global_lstm(
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = nn.MSELoss()
 
-    # shuffle truoc khi train vi cac windows tu cung 1 series nam ke nhau
-    # neu khong shuffle, model hoc theo thu tu thay vi hoc pattern
     n = X.shape[0]
     indices = np.arange(n)
 
-    # tach 10% cuoi lam val de early stopping, khong shuffle phan val
     val_size = max(1, int(n * 0.1))
     rng = np.random.default_rng(42)
     rng.shuffle(indices)
@@ -245,7 +307,6 @@ def train_global_lstm(
 
     for epoch in range(EPOCHS):
         model.train()
-        # shuffle lai train moi epoch de tranh hoc thu tu
         perm = torch.randperm(X_train_t.shape[0], device=device)
         epoch_loss = 0.0
         n_batches = 0
@@ -279,7 +340,6 @@ def train_global_lstm(
             if patience_counter >= PATIENCE:
                 break
 
-    # load lai best weights, ke ca khi early stop van la converged
     if best_state:
         model.load_state_dict(best_state)
     model.to(device)
@@ -293,6 +353,20 @@ def predict_fold(
     test_inputs: dict[tuple[str, str], np.ndarray],
     device: torch.device | None = None,
 ) -> dict[tuple[str, str], np.ndarray]:
+    """Generate predictions for every series in a fold.
+
+    Takes the last ``LOOKBACK`` training rows, scales them, runs the
+    model, inverse-transforms, and clamps to >= 0.
+
+    Args:
+        model: Trained :class:`GlobalLSTM`.
+        scaler: Fitted MinMaxScaler (from training data only).
+        test_inputs: Mapping ``(item_id, store_id) -> raw_input``.
+        device: PyTorch device (auto-detected if ``None``).
+
+    Returns:
+        Mapping ``(item_id, store_id) -> y_pred`` (float64, >= 0).
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -308,14 +382,11 @@ def predict_fold(
         with torch.no_grad():
             y_scaled = model(x_t).cpu().numpy().flatten()
 
-        # inverse transform chi cot sales (idx 0)
-        # tao dummy array voi shape (horizon, n_features) de dung scaler
         n_features = scaler.n_features_in_
         dummy = np.zeros((HORIZON, n_features), dtype=np.float32)
         dummy[:, _SALES_IDX] = y_scaled
         y_inv = scaler.inverse_transform(dummy)[:, _SALES_IDX]
 
-        # clamp >= 0 vi sales khong the am
         results[key] = np.maximum(y_inv, 0.0).astype(np.float64)
 
     return results
@@ -329,6 +400,22 @@ def run_lstm_fold(
     test_end: pd.Timestamp,
     phase: int = 1,
 ) -> LstmFoldResult:
+    """Run the full LSTM pipeline for a single fold.
+
+    Prepares data, trains the Global LSTM, and generates predictions
+    for every series that has sufficient data.
+
+    Args:
+        sc_indexed: Sales DataFrame indexed by ``(item_id, store_id, date)``.
+        series_list: List of ``(item_id, store_id)`` tuples.
+        train_end: Last date of the training period.
+        test_start: First date of the test period.
+        test_end: Last date of the test period.
+        phase: Experiment phase (determines feature set).
+
+    Returns:
+        :class:`LstmFoldResult` with predictions and skip info.
+    """
     fold_data = prepare_fold_data(
         sc_indexed, series_list, train_end, test_start, test_end,
         phase=phase,

@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
 # run_experiments.sh
-# Script tu dong hoa chay toan bo experiments cho ca Phase 1 va Phase 2.
+# Automate running all experiments for Phase 1 and Phase 2.
 #
-# Luong 1 (Phase 1): chay 5 models (naive, snaive, sarimax, lstm, prophet)
-# Luong 2 (Phase 2): chi chay 3 models co enhanced features (sarimax, lstm, prophet)
+# Phase 1: 5 models (naive, snaive, sarimax, lstm, prophet)
+# Phase 2: 5 models (naive/snaive reuse Phase 1 logic but save to phase2/)
 #
-# Su dung:
-#   bash scripts/run_experiments.sh           # mac dinh dung MOCK data
-#   bash scripts/run_experiments.sh --real    # dung real parquet data
+# Usage:
+#   bash scripts/run_experiments.sh           # default uses REAL data
+#   bash scripts/run_experiments.sh --mock    # use mock data for testing
 # =============================================================================
 
-set -e  # dung ngay khi co bat ky lenh nao fail
+set -e
 
-# truyen --real neu muon dung data that
-REAL_FLAG=""
-if [[ "$1" == "--real" ]]; then
-    REAL_FLAG="--real"
-    echo "[INFO] Su dung REAL data (parquet files)"
+MOCK_FLAG=""
+if [[ "$1" == "--mock" ]]; then
+    MOCK_FLAG="--mock"
+    echo "[INFO] Using MOCK data (generated)"
 else
-    echo "[INFO] Su dung MOCK data (generated)"
+    echo "[INFO] Using REAL data (parquet files)"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,56 +31,55 @@ echo "============================================================"
 echo ""
 
 # -----------------------------------------------------------------
-# Luong 1: Phase 1 - tat ca 5 models
+# Phase 1: all 5 models
 # -----------------------------------------------------------------
 echo "============================================================"
-echo "  [PHASE 1] Bat dau chay 5 models: naive, snaive, sarimax, lstm, prophet"
-echo "  Thoi gian bat dau: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  [PHASE 1] Running 5 models: naive, snaive, sarimax, lstm, prophet"
+echo "  Start: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 echo ""
 
 python "$SCRIPT_DIR/run_experiments.py" \
     --phase 1 \
     --models naive snaive sarimax lstm prophet \
-    $REAL_FLAG
+    $MOCK_FLAG
 
 echo ""
 echo "============================================================"
-echo "  [PHASE 1] Hoan thanh!"
-echo "  Thoi gian ket thuc: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  [PHASE 1] Done!"
+echo "  End: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 echo ""
 
 # -----------------------------------------------------------------
-# Luong 2: Phase 2 - 3 models co enhanced features
-# Theo guideline, chi SARIMAX, LSTM va Prophet duoc chay voi Phase 2
-# Naive va SNaive khong dung exogenous nen ket qua giong Phase 1
+# Phase 2: all 5 models (naive/snaive produce same results as P1
+# but are saved to phase2/ for completeness)
 # -----------------------------------------------------------------
 echo "============================================================"
-echo "  [PHASE 2] Bat dau chay 3 models: sarimax, lstm, prophet"
-echo "  Thoi gian bat dau: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  [PHASE 2] Running 5 models: naive, snaive, sarimax, lstm, prophet"
+echo "  Start: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 echo ""
 
 python "$SCRIPT_DIR/run_experiments.py" \
     --phase 2 \
-    --models sarimax lstm prophet \
-    $REAL_FLAG
+    --models naive snaive sarimax lstm prophet \
+    $MOCK_FLAG
 
 echo ""
 echo "============================================================"
-echo "  [PHASE 2] Hoan thanh!"
-echo "  Thoi gian ket thuc: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  [PHASE 2] Done!"
+echo "  End: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 
 # -----------------------------------------------------------------
-# Tong ket
+# Summary
 # -----------------------------------------------------------------
 echo ""
 echo "============================================================"
-echo "  [DONE] Tat ca experiments da chay xong."
-echo "  Ket qua luu tai: $PROJECT_ROOT/results/"
-echo "  File so sanh    : $PROJECT_ROOT/results/metrics_comparison.csv"
-echo "  Thoi gian       : $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  [DONE] All experiments completed."
+echo "  Results: $PROJECT_ROOT/results/"
+echo "  Metrics: $PROJECT_ROOT/results/metrics_comparison.csv"
+echo "  Time:    $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 echo ""

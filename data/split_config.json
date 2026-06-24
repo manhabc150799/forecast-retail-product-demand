@@ -1,0 +1,59 @@
+{
+  "n_folds": 7,
+  "horizon": 14,
+  "season": 7,
+  "strategy": "expanding_window",
+  "test_period_start": "2016-03-01",
+  "test_period_end": "2016-06-19",
+  "folds": [
+    {
+      "fold": 1,
+      "train_start": "2011-01-29",
+      "train_end": "2016-02-29",
+      "test_start": "2016-03-01",
+      "test_end": "2016-03-14"
+    },
+    {
+      "fold": 2,
+      "train_start": "2011-01-29",
+      "train_end": "2016-03-14",
+      "test_start": "2016-03-15",
+      "test_end": "2016-03-28"
+    },
+    {
+      "fold": 3,
+      "train_start": "2011-01-29",
+      "train_end": "2016-03-28",
+      "test_start": "2016-03-29",
+      "test_end": "2016-04-11"
+    },
+    {
+      "fold": 4,
+      "train_start": "2011-01-29",
+      "train_end": "2016-04-11",
+      "test_start": "2016-04-12",
+      "test_end": "2016-04-25"
+    },
+    {
+      "fold": 5,
+      "train_start": "2011-01-29",
+      "train_end": "2016-04-25",
+      "test_start": "2016-04-26",
+      "test_end": "2016-05-09"
+    },
+    {
+      "fold": 6,
+      "train_start": "2011-01-29",
+      "train_end": "2016-05-09",
+      "test_start": "2016-05-10",
+      "test_end": "2016-05-23"
+    },
+    {
+      "fold": 7,
+      "train_start": "2011-01-29",
+      "train_end": "2016-05-23",
+      "test_start": "2016-05-24",
+      "test_end": "2016-06-06"
+    }
+  ]
+}

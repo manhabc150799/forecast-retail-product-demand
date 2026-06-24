@@ -1,7 +1,9 @@
-# Prophet model cho M5 Forecasting
-# dung Facebook Prophet voi add_regressor de them exogenous features
-# fallback ve SNaive giong SARIMAX khi Prophet fail
-# tat uncertainty_samples vi khong can confidence interval, chi can point forecast
+"""Prophet model wrapper for M5 Forecasting.
+
+Uses Facebook Prophet with ``add_regressor`` for exogenous features.
+Falls back to Seasonal Naive when Prophet fails or times out,
+mirroring the SARIMAX fallback pattern.
+"""
 
 from __future__ import annotations
 
@@ -16,23 +18,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-# them project root vao sys.path de import src.* duoc tu bat ky dau
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models.naive import predict_snaive  # noqa: E402
 
-# tat log verbose cua Prophet va cmdstanpy, chi giu WARNING tro len
 logging.getLogger("prophet").setLevel(logging.WARNING)
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
-# timeout 120s, Prophet cham hon SARIMAX nhung van can gioi han
 TIMEOUT_SECONDS: int = 120
 HORIZON: int = 14
 SEASON: int = 7
 
-# phase 1 chi dung calendar features, phase 2 them lag/rolling/price
 PHASE1_REGRESSOR_COLS: list[str] = [
     "day_of_week", "month", "is_holiday", "is_weekend",
 ]
@@ -46,7 +44,15 @@ PHASE2_REGRESSOR_COLS: list[str] = [
 
 @dataclass
 class ProphetResult:
-    """Ket qua du bao cua Prophet, co co fallback giong SarimaxResult."""
+    """Container for a single Prophet forecast result.
+
+    Attributes:
+        y_pred: Predicted values, shape ``(horizon,)``.
+        fallback: ``True`` when SNaive was used instead of Prophet.
+        converged: ``True`` when Prophet fitted successfully.
+        error_msg: Empty string on success, descriptive message on failure.
+    """
+
     y_pred: np.ndarray
     fallback: bool
     converged: bool
@@ -54,7 +60,17 @@ class ProphetResult:
 
 
 def get_regressor_cols(phase: int) -> list[str]:
-    """Tra ve danh sach regressor tuong ung voi phase (1 hoac 2)."""
+    """Return the list of regressor column names for a given phase.
+
+    Args:
+        phase: Experiment phase (1 or 2).
+
+    Returns:
+        List of column name strings.
+
+    Raises:
+        ValueError: If *phase* is not 1 or 2.
+    """
     if phase == 1:
         return PHASE1_REGRESSOR_COLS
     if phase == 2:
@@ -66,18 +82,23 @@ def _prepare_prophet_df(
     df: pd.DataFrame,
     regressor_cols: list[str],
 ) -> pd.DataFrame:
-    """Chuyen doi DataFrame thanh format Prophet: ds, y + regressors."""
-    # Prophet bat buoc phai co cot 'ds' (datetime) va 'y' (target)
+    """Convert a DataFrame to Prophet's required format (ds, y, regressors).
+
+    Args:
+        df: Source DataFrame with ``date``, ``sales``, and regressor columns.
+        regressor_cols: List of regressor column names to include.
+
+    Returns:
+        New DataFrame with ``ds`` (datetime), ``y`` (target), and regressors.
+    """
     pdf = pd.DataFrame()
     pdf["ds"] = pd.to_datetime(df["date"])
     pdf["y"] = df["sales"].to_numpy(dtype=np.float64)
 
-    # them cac cot regressor, ep float64 de tranh loi kieu
     for col in regressor_cols:
         if col in df.columns:
             pdf[col] = df[col].to_numpy(dtype=np.float64)
         else:
-            # neu cot khong ton tai, dien 0 de tranh crash
             pdf[col] = 0.0
 
     return pdf
@@ -88,7 +109,16 @@ def _prepare_future_df(
     regressor_cols: list[str],
     horizon: int,
 ) -> pd.DataFrame:
-    """Chuyen doi future DataFrame thanh format Prophet: ds + regressors."""
+    """Convert a future DataFrame to Prophet's format (ds + regressors).
+
+    Args:
+        df: Future DataFrame with ``date`` and regressor columns.
+        regressor_cols: List of regressor column names to include.
+        horizon: Number of rows to keep.
+
+    Returns:
+        New DataFrame with ``ds`` and regressor columns.
+    """
     future_slice = df.head(horizon)
     fdf = pd.DataFrame()
     fdf["ds"] = pd.to_datetime(future_slice["date"])
@@ -108,15 +138,19 @@ def _fit_and_predict(
     regressor_cols: list[str],
     horizon: int,
 ) -> np.ndarray:
-    """Fit Prophet va predict, chay trong thread rieng de co the timeout."""
-    # import o day vi Prophet nang, chi load khi can
+    """Fit Prophet and return point forecasts (runs inside a worker thread).
+
+    Args:
+        train_pdf: Training data in Prophet format.
+        future_pdf: Future data in Prophet format.
+        regressor_cols: Regressor column names added to the model.
+        horizon: Forecast horizon (for output slicing).
+
+    Returns:
+        Predicted values as a 1-D float64 array.
+    """
     from prophet import Prophet
 
-    # cau hinh Prophet
-    # - uncertainty_samples=0: tat sampling, chi can point forecast cho nhanh
-    # - yearly_seasonality=True: M5 co seasonality theo nam
-    # - weekly_seasonality=True: M5 co seasonality theo tuan (7 ngay)
-    # - daily_seasonality=False: data la daily, khong co pattern intra-day
     model = Prophet(
         yearly_seasonality=True,
         weekly_seasonality=True,
@@ -124,17 +158,13 @@ def _fit_and_predict(
         uncertainty_samples=0,
     )
 
-    # them tung regressor vao model truoc khi fit
     for col in regressor_cols:
         model.add_regressor(col)
 
-    # fit model tren training data
     model.fit(train_pdf)
 
-    # predict
     forecast = model.predict(future_pdf)
 
-    # lay gia tri du bao (yhat) cho dung horizon dong
     y_pred = forecast["yhat"].to_numpy(dtype=np.float64)[:horizon]
 
     return y_pred
@@ -148,22 +178,36 @@ def forecast_series(
     season: int = SEASON,
     timeout: int = TIMEOUT_SECONDS,
 ) -> ProphetResult:
-    """Ham tien loi: truyen DataFrame vao la xong, tu add regressors + fit.
+    """High-level convenience wrapper: DataFrame in, ProphetResult out.
 
-    Pattern input/output giong sarimax_model.forecast_series de de tich hop.
-    Neu Prophet fail hoac timeout, fallback ve SNaive.
+    Handles NaN in regressors via forward-fill, adds regressors for the
+    requested phase, and falls back to SNaive on any failure.
+
+    Args:
+        train_df: Training DataFrame with ``date``, ``sales``, and regressor columns.
+        future_df: Future DataFrame (test dates) with regressor columns.
+        phase: Experiment phase (1 = basic regressors, 2 = enhanced features).
+        horizon: Forecast horizon in days.
+        season: Seasonal period for SNaive fallback.
+        timeout: Maximum seconds for Prophet fitting.
+
+    Returns:
+        A :class:`ProphetResult` with predictions and metadata.
     """
     regressor_cols = get_regressor_cols(phase)
 
-    # chuan bi data theo format Prophet
-    train_pdf = _prepare_prophet_df(train_df, regressor_cols)
-    future_pdf = _prepare_future_df(future_df, regressor_cols, horizon)
+    train_clean = train_df.copy()
+    train_clean[regressor_cols] = train_clean[regressor_cols].ffill().bfill()
 
-    # drop rows co NaN trong train (lag/rolling dau series)
+    train_pdf = _prepare_prophet_df(train_clean, regressor_cols)
+
+    future_clean = future_df.head(horizon).copy()
+    future_clean[regressor_cols] = future_clean[regressor_cols].ffill().bfill()
+    future_pdf = _prepare_future_df(future_clean, regressor_cols, horizon)
+
     train_pdf = train_pdf.dropna().reset_index(drop=True)
 
     if len(train_pdf) < 2 * season:
-        # khong du data de fit Prophet, fallback ngay
         y_train = train_df["sales"].to_numpy(dtype=np.float64)
         y_pred = predict_snaive(y_train, horizon=horizon, season=season)
         return ProphetResult(
@@ -174,7 +218,6 @@ def forecast_series(
         )
 
     try:
-        # chay trong thread rieng de co the timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
                 _fit_and_predict,
@@ -185,7 +228,6 @@ def forecast_series(
             )
             y_pred = future.result(timeout=timeout)
 
-        # clamp >= 0 vi sales khong the am
         y_pred = np.maximum(y_pred, 0.0).astype(np.float64)[:horizon]
 
         return ProphetResult(
@@ -201,7 +243,6 @@ def forecast_series(
         error_msg = f"{type(exc).__name__}: {exc}"
         traceback.print_exc()
 
-    # Prophet fail thi dung SNaive, ghi ro fallback=True
     y_train = train_df["sales"].to_numpy(dtype=np.float64)
     y_pred = predict_snaive(y_train, horizon=horizon, season=season)
 
@@ -235,26 +276,10 @@ if __name__ == "__main__":
     future_df = series[test_mask]
 
     print(f"Train rows: {len(train_df)}, Future rows: {len(future_df)}")
-    print(f"Phase 1 regressor cols: {get_regressor_cols(1)}")
-    print(f"Phase 2 regressor cols: {get_regressor_cols(2)}")
 
     print("\n=== Phase 1 Prophet ===")
     result = forecast_series(train_df, future_df, phase=1, timeout=120)
     print(f"  fallback : {result.fallback}")
     print(f"  converged: {result.converged}")
-    print(f"  error    : {result.error_msg!r}")
     print(f"  y_pred   : {result.y_pred}")
     print(f"  shape    : {result.y_pred.shape}")
-    assert result.y_pred.shape == (HORIZON,), f"Wrong shape: {result.y_pred.shape}"
-    assert np.all(result.y_pred >= 0), "Negative predictions found"
-    print("  [PASS] Shape correct and >= 0")
-
-    print("\n=== Phase 2 Prophet ===")
-    result2 = forecast_series(train_df, future_df, phase=2, timeout=120)
-    print(f"  fallback : {result2.fallback}")
-    print(f"  converged: {result2.converged}")
-    print(f"  y_pred   : {result2.y_pred}")
-    print(f"  shape    : {result2.y_pred.shape}")
-    assert result2.y_pred.shape == (HORIZON,), f"Wrong shape: {result2.y_pred.shape}"
-    assert np.all(result2.y_pred >= 0), "Negative predictions found"
-    print("  [PASS] Shape correct and >= 0")

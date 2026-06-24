@@ -1,15 +1,55 @@
-%! Author = LENOVO
-%! Date = 4/11/2026
-
-% Preamble
-\documentclass[11pt]{article}
-
-% Packages
+\documentclass{article}
+\usepackage[utf8]{inputenc}
 \usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
 
-% Document
+\title{SARIMAX for Retail Demand Forecasting}
+\author{Machine Learning Team}
+\date{\today}
+
 \begin{document}
 
+\maketitle
 
+\section{Giới thiệu (Introduction)}
+SARIMAX (Seasonal AutoRegressive Integrated Moving Average with eXogenous factors) là một mô hình thống kê mạnh mẽ và phổ biến cho dự báo chuỗi thời gian, đặc biệt hiệu quả với các dữ liệu có tính mùa vụ (seasonality) và các yếu tố ngoại sinh ảnh hưởng đến xu hướng. Trong bối cảnh dự báo nhu cầu bán lẻ (Retail Demand Forecasting) với bộ dữ liệu M5, SARIMAX được sử dụng để lập mô hình và dự đoán doanh số bán hàng hàng ngày dựa trên các mô hình tự hồi quy (AR), trung bình trượt (MA), sai phân (I) cùng các tính năng chu kỳ hàng tuần và các biến ngoại sinh (exogenous variables) như ngày lễ, cuối tuần, hoặc giá bán.
+
+\section{Literature Review}
+Các nghiên cứu trước đây về dự báo chuỗi thời gian bán lẻ thường sử dụng các phương pháp thống kê cổ điển như ARIMA và Exponential Smoothing. Khi chuỗi thời gian bao gồm các yếu tố mùa vụ mạnh (chẳng hạn như mô hình mua sắm cuối tuần tăng vọt), họ mở rộng thành SARIMA. Tuy nhiên, doanh số bán lẻ không chỉ bị ảnh hưởng bởi quá khứ của chính nó mà còn bị tác động mạnh bởi các yếu tố bên ngoài (khuyến mãi, thay đổi giá, sự kiện ngày lễ hội, và chính sách hỗ trợ như SNAP). Việc bổ sung các biến ngoại sinh này dẫn đến sự ra đời của mô hình SARIMAX, giúp cải thiện độ chính xác dự báo một cách đáng kể.
+
+\section{Phương pháp (Methodology)}
+Mô hình SARIMAX được ký hiệu là $SARIMAX(p, d, q)(P, D, Q)_m$, trong đó:
+\begin{itemize}
+    \item $p, d, q$: Các tham số của phần không theo mùa (Non-seasonal part).
+    \item $P, D, Q$: Các tham số của phần theo mùa (Seasonal part).
+    \item $m$: Chu kỳ mùa vụ (trong dự án này $m = 7$ đại diện cho chu kỳ hàng tuần).
+\end{itemize}
+
+Phương trình tổng quát của mô hình SARIMAX với biến ngoại sinh $X_t$ là:
+\begin{equation}
+\phi_p(B)\Phi_P(B^m)(1-B)^d(1-B^m)^D y_t = \beta X_t + \theta_q(B)\Theta_Q(B^m) \epsilon_t
+\end{equation}
+Trong đó:
+\begin{itemize}
+    \item $y_t$: Chuỗi thời gian quan sát được tại thời điểm $t$.
+    \item $B$: Toán tử trễ (Backshift operator) sao cho $B y_t = y_{t-1}$.
+    \item $\phi_p(B), \Phi_P(B^m)$: Đa thức tự hồi quy (AR) không theo mùa và theo mùa.
+    \item $\theta_q(B), \Theta_Q(B^m)$: Đa thức trung bình trượt (MA) không theo mùa và theo mùa.
+    \item $\beta$: Vector hệ số cho các biến ngoại sinh $X_t$.
+    \item $\epsilon_t$: Nhiễu trắng (White noise error).
+\end{itemize}
+
+Trong dự án này, chúng tôi sử dụng thư viện \texttt{pmdarima} để thực hiện cấu hình tự động (auto\_arima), giúp tìm ra các tham số $(p,d,q)$ và $(P,D,Q)$ tối ưu dựa trên tiêu chí thông tin Akaike (AIC). Các biến ngoại sinh được đưa vào mô hình qua 2 giai đoạn (Phases):
+\begin{itemize}
+    \item \textbf{Phase 1}: Các đặc trưng cơ bản như \texttt{day\_of\_week}, \texttt{month}, \texttt{is\_holiday}, \texttt{is\_weekend}.
+    \item \textbf{Phase 2}: Tăng cường với các đặc trưng lag, rolling mean (\texttt{lag\_7}, \texttt{rolling\_7}, ...), \texttt{sell\_price}, và \texttt{snap}.
+\end{itemize}
+
+\section{Kết quả (Results) và Discussion}
+Vì SARIMAX cần ước lượng các tham số cho từng chuỗi (per-series), thời gian huấn luyện tương đối cao so với các mô hình toàn cục (Global models) hay baseline. Khi tính năng ngoại sinh được cung cấp chính xác, SARIMAX giải thích tốt được sự biến động đột biến do các sự kiện như ngày lễ hội hay cuối tuần. Tuy nhiên, đối với các chuỗi bán lẻ thưa thớt (intermittent demand) có nhiều điểm dữ liệu bằng $0$, các mô hình dạng ARIMA thường gặp khó khăn trong việc hội tụ hoặc đưa ra các dự báo có thể bị âm (do đó dự án đã áp dụng kẹp giá trị $\ge 0$).
+
+\section{Kết luận (Conclusion)}
+SARIMAX cung cấp một đường cơ sở có khả năng giải thích (interpretable baseline) mạnh mẽ cho dự báo M5. Nhờ tận dụng auto\_arima, mô hình có thể tự thích ứng với tính chất của từng mặt hàng tại từng cửa hàng cụ thể. Dù có rào cản về mặt thời gian huấn luyện khi áp dụng trên quy mô rất lớn (hàng chục nghìn chuỗi), SARIMAX vẫn thể hiện sự vượt trội rõ rệt so với Naive và Seasonal Naive nhờ việc tích hợp được ảnh hưởng của các biến kiện bên ngoài.
 
 \end{document}

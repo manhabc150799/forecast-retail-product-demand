@@ -1,7 +1,9 @@
-# dung ThreadPoolExecutor thay ProcessPoolExecutor vi Windows ko pickle duoc function
-# khi chay qua runpy. signal.alarm cung chi co tren Linux.
-# thread-based timeout ko kill duoc thread that su nhung du tot cho use case nay
-# vi auto_arima hiem khi treo vinh vien, chi can cat khi qua cham
+"""SARIMAX wrapper with auto_arima, timeout, and SNaive fallback.
+
+Uses ``pmdarima.auto_arima`` with per-series timeout (default 60 s).
+When SARIMAX fails to converge or times out, falls back to Seasonal Naive
+and marks ``fallback=True`` transparently for downstream reporting.
+"""
 
 from __future__ import annotations
 
@@ -15,20 +17,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-# them project root vao sys.path de import src.* duoc tu bat ky dau
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.models.naive import predict_snaive  # noqa: E402
 
-
-# timeout 60s theo yeu cau guideline, qua lau thi fallback cho nhanh
 TIMEOUT_SECONDS: int = 60
 HORIZON: int = 14
 SEASON: int = 7
 
-# config auto_arima dung chinh xac theo guideline, khong duoc thay doi
 _AUTO_ARIMA_KWARGS: dict[str, Any] = {
     "max_p": 3,
     "max_q": 3,
@@ -42,7 +40,6 @@ _AUTO_ARIMA_KWARGS: dict[str, Any] = {
     "trace": False,
 }
 
-# phase 1 chi dung calendar features, phase 2 them lag/rolling/price
 PHASE1_EXOG_COLS: list[str] = [
     "day_of_week", "month", "is_holiday", "is_weekend",
 ]
@@ -56,7 +53,15 @@ PHASE2_EXOG_COLS: list[str] = [
 
 @dataclass
 class SarimaxResult:
-    # gom ket qua lai 1 cho, de caller biet la SARIMAX that hay fallback SNaive
+    """Container for a single SARIMAX forecast result.
+
+    Attributes:
+        y_pred: Predicted values, shape ``(horizon,)``.
+        fallback: ``True`` when SNaive was used instead of SARIMAX.
+        converged: ``True`` when SARIMAX fitted successfully.
+        error_msg: Empty string on success, descriptive message on failure.
+    """
+
     y_pred: np.ndarray
     fallback: bool
     converged: bool
@@ -69,8 +74,17 @@ def _fit_and_predict(
     exog_future: np.ndarray | None,
     horizon: int,
 ) -> np.ndarray:
-    # chay trong thread rieng de main thread co the timeout duoc
-    # import pmdarima o day vi no nang, chi load khi can
+    """Fit auto_arima and return point forecasts (runs inside a worker thread).
+
+    Args:
+        y_train: Training target values.
+        exog_train: Exogenous matrix for training (or ``None``).
+        exog_future: Exogenous matrix for the forecast horizon (or ``None``).
+        horizon: Number of steps to forecast.
+
+    Returns:
+        Predicted values as a 1-D float64 array.
+    """
     import pmdarima as pm
 
     model = pm.auto_arima(
@@ -87,7 +101,17 @@ def _fit_and_predict(
 
 
 def get_exog_columns(phase: int) -> list[str]:
-    # tra ve danh sach cot exog tuong ung voi phase
+    """Return the list of exogenous column names for a given phase.
+
+    Args:
+        phase: Experiment phase (1 or 2).
+
+    Returns:
+        List of column name strings.
+
+    Raises:
+        ValueError: If *phase* is not 1 or 2.
+    """
     if phase == 1:
         return PHASE1_EXOG_COLS
     if phase == 2:
@@ -99,7 +123,15 @@ def prepare_exog(
     df: pd.DataFrame,
     phase: int,
 ) -> np.ndarray:
-    # cat dung cac cot exog tu dataframe, ep float32 tiet kiem RAM
+    """Extract exogenous columns from a DataFrame as a float32 array.
+
+    Args:
+        df: Source DataFrame containing all required columns.
+        phase: Experiment phase (determines which columns to select).
+
+    Returns:
+        2-D float32 numpy array of shape ``(len(df), n_exog)``.
+    """
     cols = get_exog_columns(phase)
     return df[cols].to_numpy(dtype=np.float32)
 
@@ -112,9 +144,27 @@ def run_sarimax_robust(
     season: int = SEASON,
     timeout: int = TIMEOUT_SECONDS,
 ) -> SarimaxResult:
-    # bat moi loi co the xay ra (timeout, LinAlgError, bat ky gi)
-    # roi fallback ve SNaive thay vi crash ca pipeline
-    # phai validate shape exog truoc khi truyen vao model
+    """Fit SARIMAX with timeout and automatic SNaive fallback.
+
+    Catches all exceptions (timeout, LinAlgError, etc.) and substitutes
+    a Seasonal Naive forecast, recording the failure transparently.
+
+    Args:
+        y_train: Training target values.
+        exog_train: Exogenous training matrix (or ``None``).
+        exog_future: Exogenous future matrix, shape ``(horizon, n_exog)``
+                     (or ``None``).
+        horizon: Forecast horizon in days.
+        season: Seasonal period for SNaive fallback.
+        timeout: Maximum seconds to wait for auto_arima.
+
+    Returns:
+        A :class:`SarimaxResult` with predictions and metadata.
+
+    Raises:
+        ValueError: If ``exog_future`` row count does not match *horizon*,
+                    or if exactly one of the exog arguments is ``None``.
+    """
     if exog_future is not None and exog_future.shape[0] != horizon:
         raise ValueError(
             f"exog_future rows ({exog_future.shape[0]}) != horizon ({horizon})"
@@ -153,7 +203,6 @@ def run_sarimax_robust(
         error_msg = f"{type(exc).__name__}: {exc}"
         traceback.print_exc()
 
-    # SARIMAX fail thi dung SNaive, ghi ro fallback=True de bao cao sau
     y_pred = predict_snaive(y_train, horizon=horizon, season=season)
 
     return SarimaxResult(
@@ -172,13 +221,34 @@ def forecast_series(
     season: int = SEASON,
     timeout: int = TIMEOUT_SECONDS,
 ) -> SarimaxResult:
-    # ham tien loi: truyen DataFrame vao la xong, tu cat exog + goi robust
-    y_train = train_df["sales"].to_numpy(dtype=np.float64)
-    exog_train = prepare_exog(train_df, phase)
+    """High-level convenience wrapper: DataFrame in, SarimaxResult out.
 
-    # chi lay dung horizon dong, tranh sai shape khi predict
-    future_slice = future_df.head(horizon)
-    exog_future = prepare_exog(future_slice, phase)
+    Automatically selects exogenous columns for the requested phase,
+    handles NaN values in exogenous features via forward-fill, and
+    delegates to :func:`run_sarimax_robust`.
+
+    Args:
+        train_df: Training DataFrame with ``sales`` and exog columns.
+        future_df: Future DataFrame (test dates) with exog columns.
+        phase: Experiment phase (1 = basic exog, 2 = enhanced features).
+        horizon: Forecast horizon in days.
+        season: Seasonal period for SNaive fallback.
+        timeout: Maximum seconds for auto_arima.
+
+    Returns:
+        A :class:`SarimaxResult` with predictions and metadata.
+    """
+    exog_cols = get_exog_columns(phase)
+
+    train_clean = train_df.copy()
+    train_clean[exog_cols] = train_clean[exog_cols].ffill().bfill()
+
+    y_train = train_clean["sales"].to_numpy(dtype=np.float64)
+    exog_train = train_clean[exog_cols].to_numpy(dtype=np.float32)
+
+    future_slice = future_df.head(horizon).copy()
+    future_slice[exog_cols] = future_slice[exog_cols].ffill().bfill()
+    exog_future = future_slice[exog_cols].to_numpy(dtype=np.float32)
 
     return run_sarimax_robust(
         y_train=y_train,

@@ -1,15 +1,42 @@
-%! Author = LENOVO
-%! Date = 4/11/2026
-
-% Preamble
-\documentclass[11pt]{article}
-
-% Packages
+\documentclass{article}
+\usepackage[utf8]{inputenc}
 \usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
 
-% Document
+\title{Facebook Prophet for Retail Demand Forecasting}
+\author{Machine Learning Team}
+\date{\today}
+
 \begin{document}
 
+\maketitle
 
+\section{Giới thiệu (Introduction)}
+Facebook Prophet là một thư viện dự báo mã nguồn mở được phát triển bởi nhóm Khoa học Dữ liệu cốt lõi của Facebook. Nó được thiết kế để dự báo các dữ liệu chuỗi thời gian có đặc trưng mùa vụ mạnh (seasonal effects) và có khả năng chống chịu tốt với dữ liệu bị thiếu (missing data) hoặc những thay đổi đột ngột trong xu hướng. Trong dự án dự báo nhu cầu bán lẻ, Prophet là một ứng cử viên cực kỳ mạnh mẽ vì doanh số bán hàng hàng ngày (daily sales) phụ thuộc rất nhiều vào các ngày trong tuần (weekly seasonality), ngày lễ hội (holidays), và xu hướng thay đổi.
+
+\section{Literature Review}
+Truyền thống, dự báo chuỗi thời gian dựa vào các mô hình ARIMA hoặc Exponential Smoothing. Các mô hình này đòi hỏi chuỗi dữ liệu đầu vào phải được tiền xử lý kỹ (như stationarity check) và thường không ổn định với các ngoại lai (outliers). Taylor và Letham (2018) đã giới thiệu Prophet dựa trên mô hình cộng tính (additive model), trong đó chuỗi thời gian được phân rã thành xu hướng (trend), tính mùa vụ (seasonality), và các ngày lễ (holidays). Prophet đã chứng minh được tính hiệu quả cao trong các ứng dụng kinh doanh thực tế vì nó tự động hóa phần lớn quy trình thiết lập và dễ dàng kết hợp các tri thức chuyên gia (domain knowledge) thông qua biến ngoại sinh.
+
+\section{Phương pháp (Methodology)}
+Mô hình Prophet sử dụng phương trình mô hình cộng tính phân rã cơ bản:
+\begin{equation}
+y(t) = g(t) + s(t) + h(t) + \epsilon_t
+\end{equation}
+Trong đó:
+\begin{itemize}
+    \item $g(t)$: Hàm xu hướng (Trend function), mô hình hóa sự thay đổi dài hạn (thường dùng Piecewise Linear hoặc Logistic growth).
+    \item $s(t)$: Hàm mùa vụ (Seasonality function), mô hình hóa các chu kỳ định kỳ (ví dụ: chu kỳ hàng tuần được mô hình bằng chuỗi Fourier).
+    \item $h(t)$: Ảnh hưởng của ngày lễ (Holidays) hoặc các sự kiện bất thường có thể chỉ xuất hiện trong 1-2 ngày nhất định.
+    \item $\epsilon_t$: Nhiễu ngẫu nhiên (Error term), giả định phân phối chuẩn.
+\end{itemize}
+
+Trong dự án của chúng tôi, mô hình được cấu hình để dự báo dữ liệu theo ngày. Chúng tôi bật chế độ \texttt{yearly\_seasonality} và \texttt{weekly\_seasonality}. Để đưa vào tác động của giá, các kỳ nghỉ, và hiệu ứng độ trễ, chúng tôi sử dụng tính năng \texttt{add\_regressor()} của Prophet. Các biến ngoại sinh này (như \texttt{sell\_price}, \texttt{is\_weekend}, \texttt{lag\_7}) giúp Prophet hiệu chỉnh xu hướng dự báo cơ sở để phản ánh các tác nhân kinh tế học hành vi của khách hàng tại các cửa hàng.
+
+\section{Kết quả (Results) và Discussion}
+Thử nghiệm trên dữ liệu bán lẻ cho thấy Prophet có tốc độ huấn luyện rất nhanh (nhanh hơn đáng kể so với SARIMAX) nhờ vào việc tối ưu hóa backend qua thư viện Stan (L-BFGS). Mô hình Prophet bắt rất tốt mẫu mua sắm tăng cao vào các ngày cuối tuần hoặc ngày lãnh lương (SNAP). Tuy nhiên, khi số lượng hồi quy ngoại sinh tăng cao (ở Phase 2 với nhiều tính năng rolling và lag), Prophet đôi khi gặp hiện tượng suy giảm hiệu suất nếu các biến ngoại sinh bị tương quan cao (multicollinearity) hoặc nhiễu. Mặc dù vậy, thiết lập mặc định của Prophet cung cấp một dự báo rất ổn định mà không cần tinh chỉnh quá nhiều hyperparameter.
+
+\section{Kết luận (Conclusion)}
+Prophet là một mô hình cực kỳ thiết thực cho mảng bán lẻ do khả năng kết hợp tốt tính mùa vụ cùng các biến sự kiện riêng biệt. Thời gian chạy nhanh cho phép mở rộng quy mô lên hàng ngàn mặt hàng một cách hiệu quả. Khả năng giải thích của Prophet (vẽ các thành phần trend, weekly, holidays riêng lẻ) cũng giúp các nhà phân tích nghiệp vụ (business analysts) dễ dàng tin tưởng và thẩm định chất lượng của dự báo thay vì chỉ coi nó là một "hộp đen".
 
 \end{document}
